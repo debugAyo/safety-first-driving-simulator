@@ -2,6 +2,7 @@ import os
 import pygame
 import random
 import sys
+import math
 
 # ==========================================
 # CONSTANTS & CONFIGURATION
@@ -17,16 +18,18 @@ LANE_CENTERS = [ROAD_LEFT + LANE_WIDTH * 0.5, ROAD_LEFT + LANE_WIDTH * 1.5, ROAD
 DIVIDERS = [ROAD_LEFT + LANE_WIDTH, ROAD_LEFT + LANE_WIDTH * 2]
 
 # Colors
-SKY = (148, 184, 212)
-ASPHALT = (52, 58, 64)
-ROAD_EDGE = (82, 88, 94)
-LANE_MARK = (236, 240, 241)
-HUD_PANEL = (18, 24, 29)
-TEXT = (245, 247, 250)
+SKY = (24, 30, 36)
+# Polished palette (requested)
+ROAD_COLOR = (0x2a, 0x2a, 0x2a)       # #2a2a2a
+LANE_YELLOW = (0xd4, 0xa0, 0x17)      # #d4a017
+GRASS = (24, 120, 35)
+ROAD_EDGE = (42, 42, 42)
+HUD_PANEL = (12, 12, 12, 180)         # semi-transparent
+TEXT = (230, 230, 230)
 ACCENT = (224, 172, 80)
 DANGER = (196, 58, 58)
 SAFE = (79, 149, 87)
-PLAYER_BLUE = (32, 92, 155)
+PLAYER_COLOR = (0, 153, 255)          # #0099ff
 NPC_RED = (149, 57, 57)
 OBSTACLE_AMBER = (190, 130, 54)
 BLACK = (0, 0, 0)
@@ -46,6 +49,29 @@ def load_sprite(name, size, fallback_color, colorkey=None):
     surface = pygame.Surface(size, pygame.SRCALPHA)
     surface.fill(fallback_color)
     return surface
+
+
+class Particle:
+    def __init__(self, pos, vel, color, life=40):
+        self.x, self.y = pos
+        self.vx, self.vy = vel
+        self.color = color
+        self.life = life
+        self.max_life = life
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.vy += 0.2  # gravity-ish
+        self.life -= 1
+
+    def draw(self, surf):
+        if self.life <= 0: return
+        a = max(0, int(255 * (self.life / self.max_life)))
+        col = (self.color[0], self.color[1], self.color[2], a)
+        s = pygame.Surface((4, 4), pygame.SRCALPHA)
+        s.fill(col)
+        surf.blit(s, (int(self.x), int(self.y)))
 
 # ==========================================
 # CLASSES
@@ -105,7 +131,7 @@ class Player:
         if self.sprite is not None:
             screen.blit(self.sprite, self.rect)
         else:
-            pygame.draw.rect(screen, PLAYER_BLUE, self.rect, border_radius=6)
+            pygame.draw.rect(screen, PLAYER_COLOR, self.rect, border_radius=6)
 
         if self.braking:
             pygame.draw.rect(screen, DANGER, (self.rect.left + 5, self.rect.bottom - 10, 10, 5))
@@ -186,9 +212,9 @@ class Crosswalk:
     def draw(self, screen):
         # Crosswalk stripes
         for i in range(ROAD_LEFT + 10, ROAD_RIGHT, 30):
-            pygame.draw.rect(screen, LANE_MARK, (i, self.y, 20, self.height))
+            pygame.draw.rect(screen, LANE_YELLOW, (i, self.y, 20, self.height))
         # Stop line
-        pygame.draw.rect(screen, LANE_MARK, self.stop_line)
+        pygame.draw.rect(screen, LANE_YELLOW, self.stop_line)
         # Traffic Light box on the right side
         light_box = pygame.Rect(ROAD_RIGHT + 10, self.y, 30, 90)
         pygame.draw.rect(screen, ROAD_EDGE, light_box)
@@ -213,7 +239,7 @@ class Game:
         self.font = pygame.font.SysFont("Arial", 24, bold=True)
         self.big_font = pygame.font.SysFont("Arial", 48, bold=True)
 
-        self.player_sprite = load_sprite("player_car.png", (40, 70), PLAYER_BLUE)
+        self.player_sprite = load_sprite("player_car.png", (40, 70), PLAYER_COLOR)
         self.npc_sprite = load_sprite("npc_car.png", (40, 70), NPC_RED)
         self.obstacle_sprite = load_sprite("obstacle.png", (24, 24), OBSTACLE_AMBER)
         
@@ -224,7 +250,33 @@ class Game:
             self.joystick.init()
 
         self.state = "START"
+        # UI / runtime state
+        self.display_score = 100.0
+        self.particles = []
+        self.high_score = self.load_high_score()
+        self.saved_high = False
+        self.lives = 3
+        self.red_light_active = False
+        self.red_pulse = 0.0
         self.reset_game()
+
+    def load_high_score(self):
+        try:
+            p = os.path.join(os.path.dirname(__file__), "highscore.txt")
+            if os.path.exists(p):
+                with open(p, "r") as f:
+                    return int(f.read().strip() or 0)
+        except Exception:
+            pass
+        return 0
+
+    def save_high_score(self):
+        try:
+            p = os.path.join(os.path.dirname(__file__), "highscore.txt")
+            with open(p, "w") as f:
+                f.write(str(self.high_score))
+        except Exception:
+            pass
 
     def reset_game(self):
         self.player = Player(self.player_sprite)
@@ -259,6 +311,12 @@ class Game:
         }
         self.bonuses = {"clean_overtake": 0}
         self.messages =[]  # UI Floating text
+        # Time limit (seconds) for the session; 0 means no limit
+        self.level_time_limit = 120
+        self.time_left = float(self.level_time_limit)
+        self.display_score = float(self.safety_score)
+        self.particles = []
+        self.saved_high = False
 
     def run(self):
         while True:
@@ -282,9 +340,9 @@ class Game:
                 sys.exit()
 
             if event.type == pygame.KEYDOWN:
-                if self.state == "START" and event.key == pygame.K_SPACE:
+                if self.state == "START" and event.key == pygame.K_RETURN:
                     self.state = "PLAY"
-                elif self.state == "GAME_OVER" and event.key == pygame.K_SPACE:
+                elif self.state == "GAME_OVER" and event.key == pygame.K_r:
                     self.reset_game()
                     self.state = "PLAY"
                 elif self.state == "PLAY":
@@ -348,6 +406,38 @@ class Game:
             msg["timer"] -= dt
             if msg["timer"] <= 0:
                 self.messages.remove(msg)
+
+        # Animate displayed score toward actual score
+        self.display_score += (self.safety_score - self.display_score) * min(10 * dt, 1)
+
+        # Update particles
+        for p in self.particles[:]:
+            p.update()
+            if p.life <= 0:
+                self.particles.remove(p)
+
+        # Red light detection (any visible crosswalk in RED)
+        self.red_light_active = False
+        for cw in self.crosswalks:
+            if cw.state == "RED" and -200 < cw.y < HEIGHT:
+                self.red_light_active = True
+                break
+        # Pulse value
+        if self.red_light_active:
+            self.red_pulse += dt * 3.0
+        else:
+            self.red_pulse = 0.0
+
+        # Time limit handling
+        if self.level_time_limit and self.state == "PLAY":
+            self.time_left -= dt
+            if self.time_left <= 0:
+                self.time_left = 0
+                if self.safety_score > self.high_score:
+                    self.high_score = int(self.safety_score)
+                    self.save_high_score()
+                self.state = "GAME_OVER"
+                return
 
     def check_lane_discipline(self, dt):
         # Identify current lane (0, 1, 2)
@@ -427,10 +517,32 @@ class Game:
         # Crash with Cars/Obstacles
         for npc in self.npcs:
             if self.player.rect.colliderect(npc.rect):
+                # spawn particles at collision
+                cx, cy = self.player.rect.center
+                for _ in range(40):
+                    vx = random.uniform(-6, 6)
+                    vy = random.uniform(-4, 2)
+                    col = random.choice([PLAYER_COLOR, NPC_RED, OBSTACLE_AMBER])
+                    self.particles.append(Particle((cx, cy), (vx, vy), col, life=40))
+                # preserve existing behavior
+                if self.safety_score > self.high_score:
+                    self.high_score = int(self.safety_score)
+                    self.save_high_score()
                 self.state = "GAME_OVER"
+                return
         for obs in self.obstacles:
             if self.player.rect.colliderect(obs.rect):
+                cx, cy = self.player.rect.center
+                for _ in range(30):
+                    vx = random.uniform(-5, 5)
+                    vy = random.uniform(-5, 1)
+                    col = random.choice([PLAYER_COLOR, OBSTACLE_AMBER])
+                    self.particles.append(Particle((cx, cy), (vx, vy), col, life=40))
+                if self.safety_score > self.high_score:
+                    self.high_score = int(self.safety_score)
+                    self.save_high_score()
                 self.state = "GAME_OVER"
+                return
                 
         # Intersection Stop Line (Ran Red Light)
         for cw in self.crosswalks:
@@ -441,50 +553,98 @@ class Game:
                 cw.penalized = True
 
     def draw_play(self):
+        # Sky sidebars
         self.screen.fill(SKY)
 
-        pygame.draw.rect(self.screen, ASPHALT, (ROAD_LEFT, 0, ROAD_RIGHT - ROAD_LEFT, HEIGHT))
+        # Grass / roadside
+        pygame.draw.rect(self.screen, GRASS, (0, 0, ROAD_LEFT, HEIGHT))
+        pygame.draw.rect(self.screen, GRASS, (ROAD_RIGHT, 0, WIDTH - ROAD_RIGHT, HEIGHT))
+
+        # Road
+        pygame.draw.rect(self.screen, ROAD_COLOR, (ROAD_LEFT, 0, ROAD_RIGHT - ROAD_LEFT, HEIGHT))
         pygame.draw.rect(self.screen, ROAD_EDGE, (ROAD_LEFT - 18, 0, 18, HEIGHT))
         pygame.draw.rect(self.screen, ROAD_EDGE, (ROAD_RIGHT, 0, 18, HEIGHT))
 
-        # Draw Road Lines
-        pygame.draw.line(self.screen, LANE_MARK, (ROAD_LEFT, 0), (ROAD_LEFT, HEIGHT), 4)
-        pygame.draw.line(self.screen, LANE_MARK, (ROAD_RIGHT, 0), (ROAD_RIGHT, HEIGHT), 4)
-        
+        # Lane dividers (dashed)
+        pygame.draw.line(self.screen, LANE_YELLOW, (ROAD_LEFT, 0), (ROAD_LEFT, HEIGHT), 4)
+        pygame.draw.line(self.screen, LANE_YELLOW, (ROAD_RIGHT, 0), (ROAD_RIGHT, HEIGHT), 4)
         for div_x in DIVIDERS:
-            for y in range(-60, HEIGHT, 60):
-                pygame.draw.line(self.screen, LANE_MARK, (div_x, y + self.scroll_y), (div_x, y + self.scroll_y + 30), 2)
+            for y in range(-120, HEIGHT + 60, 60):
+                y1 = y + int(self.scroll_y)
+                pygame.draw.line(self.screen, LANE_YELLOW, (div_x, y1), (div_x, y1 + 30), 6)
 
-        # Draw Entities
+        # Crosswalks and entities
         for cw in self.crosswalks: cw.draw(self.screen)
         for obs in self.obstacles: obs.draw(self.screen)
         for npc in self.npcs: npc.draw(self.screen)
         self.player.draw(self.screen)
 
+        # Particles (on top of entities)
+        for p in self.particles:
+            p.draw(self.screen)
+
+        # Red light overlay + banner
+        if self.red_light_active:
+            pulse = (0.5 + 0.5 * math.sin(self.red_pulse))
+            overlay = pygame.Surface((ROAD_RIGHT - ROAD_LEFT, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((200, 30, 30, int(80 * pulse)))
+            self.screen.blit(overlay, (ROAD_LEFT, 0))
+
+            # Banner across road area
+            banner_h = 60
+            banner = pygame.Surface((ROAD_RIGHT - ROAD_LEFT, banner_h), pygame.SRCALPHA)
+            banner.fill((200, 20, 20, int(200 * pulse)))
+            self.screen.blit(banner, (ROAD_LEFT, HEIGHT//2 - banner_h//2))
+            txt = self.big_font.render("RED LIGHT — STOP", True, TEXT)
+            self.screen.blit(txt, (ROAD_LEFT + (ROAD_RIGHT-ROAD_LEFT)//2 - txt.get_width()//2, HEIGHT//2 - txt.get_height()//2))
+
         self.draw_hud()
 
     def draw_hud(self):
-        # Top-left Score
-        score_surf = self.font.render(f"Safety Score: {self.safety_score}", True, TEXT)
-        self.screen.blit(score_surf, (10, 10))
+        # HUD panel
+        panel = pygame.Surface((WIDTH - 20, 80), pygame.SRCALPHA)
+        panel.fill(HUD_PANEL)
+        self.screen.blit(panel, (10, 10))
 
-        # Bottom-left Current Speed
-        speed_surf = self.font.render(f"Speed: {int(self.player.speed)} MPH", True, TEXT)
-        self.screen.blit(speed_surf, (10, HEIGHT - 40))
+        # Animated score (left)
+        score_text = self.big_font.render(str(int(self.display_score)), True, TEXT)
+        self.screen.blit(score_text, (20, 12))
+        best_text = self.font.render(f"Best: {self.high_score}", True, ACCENT)
+        self.screen.blit(best_text, (20, 12 + score_text.get_height() + 4))
 
-        # Bottom-right Speed Limit
-        flash_bg = HUD_PANEL
+        # Time-left display
+        if self.level_time_limit and self.state == "PLAY":
+            mins = int(self.time_left) // 60
+            secs = int(self.time_left) % 60
+            time_s = f"Time: {mins:02d}:{secs:02d}"
+            time_text = self.font.render(time_s, True, TEXT)
+            self.screen.blit(time_text, (20 + score_text.get_width() + 12, 20))
+
+        # Top-right: lives (hearts) and current speed
+        # Draw hearts (shift left to avoid overlap with limit)
+        heart_x = WIDTH - 24
+        heart_y = 18
+        for i in range(self.lives):
+            hx = heart_x - i * 24
+            pygame.draw.circle(self.screen, DANGER, (hx - 18, heart_y + 12), 6)
+            pygame.draw.polygon(self.screen, DANGER, [(hx-24, heart_y+12), (hx-18, heart_y+20), (hx-12, heart_y+12)])
+
+        speed_text = self.font.render(f"SPD: {int(self.player.speed)}", True, TEXT)
+        self.screen.blit(speed_text, (WIDTH - 200, 12 + score_text.get_height()))
+
+        # Speed limit indicator (right-top corner area)
+        flash_bg = ACCENT
         if self.player.speed > self.speed_limit and (pygame.time.get_ticks() // 250) % 2 == 0:
             flash_bg = DANGER
-            
-        limit_rect = pygame.Rect(WIDTH - 120, HEIGHT - 100, 100, 80)
-        pygame.draw.rect(self.screen, TEXT, limit_rect)
-        pygame.draw.circle(self.screen, flash_bg, limit_rect.center, 35)
-        
-        limit_text = self.font.render("LIMIT", True, BLACK)
-        val_text = self.big_font.render(str(self.speed_limit), True, TEXT)
-        self.screen.blit(limit_text, (limit_rect.centerx - limit_text.get_width()//2, limit_rect.top - 25))
-        self.screen.blit(val_text, (limit_rect.centerx - val_text.get_width()//2, limit_rect.centery - val_text.get_height()//2))
+        limit_rect = pygame.Rect(WIDTH - 140, 16, 120, 48)
+        # use an alpha surface to draw semi-transparent background
+        limit_surf = pygame.Surface((limit_rect.w, limit_rect.h), pygame.SRCALPHA)
+        limit_surf.fill((20, 20, 20, 200))
+        # draw circular background for the numeric value
+        pygame.draw.circle(limit_surf, flash_bg, (limit_rect.w - 36, limit_rect.h//2), 18)
+        self.screen.blit(limit_surf, limit_rect.topleft)
+        lim = self.font.render(f"LIMIT {self.speed_limit}", True, TEXT)
+        self.screen.blit(lim, (limit_rect.left + 8, limit_rect.top + 10))
 
         # Warnings
         if self.tailgating_active:
@@ -492,70 +652,123 @@ class Game:
             self.screen.blit(warning_surf, (WIDTH//2 - warning_surf.get_width()//2, HEIGHT//2 - 100))
 
         # Floating Messages
-        y_offset = 50
+        y_offset = 100
         for msg in self.messages:
             msg_surf = self.font.render(msg["text"], True, msg["color"])
-            self.screen.blit(msg_surf, (10, y_offset))
-            y_offset += 30
+            self.screen.blit(msg_surf, (20, y_offset))
+            y_offset += 26
+
+        # Tips panel (in-play)
+        tips = [
+            "Navigation — Use eyes on horizon to steer smoothly.",
+            "Plan lane changes early; signal before you move.",
+            "Scan ahead for obstacles and brake early.",
+        ]
+        t_w = 360
+        t_h = 84
+        tip_surf = pygame.Surface((t_w, t_h), pygame.SRCALPHA)
+        tip_surf.fill(HUD_PANEL)
+        bx = 20
+        by = 140
+        self.screen.blit(tip_surf, (bx, by))
+        ty = by + 8
+        for t in tips:
+            line = self.font.render("- " + t, True, TEXT)
+            self.screen.blit(line, (bx + 8, ty))
+            ty += 24
+
+        # Controls panel (bottom-left)
+        ctrl_lines = [
+            "Controls:",
+            "← / → : Change lanes",
+            "↑ / W : Accelerate",
+            "↓ / S / Space : Brake",
+            "Q / E : Left / Right signal",
+        ]
+        cw = 300
+        ch = 120
+        ctrl_s = pygame.Surface((cw, ch), pygame.SRCALPHA)
+        ctrl_s.fill(HUD_PANEL)
+        ctrl_x = 20
+        ctrl_y = HEIGHT - ch - 20
+        self.screen.blit(ctrl_s, (ctrl_x, ctrl_y))
+        ly = ctrl_y + 8
+        for i, line in enumerate(ctrl_lines):
+            color = ACCENT if i == 0 else TEXT
+            txt = self.font.render(line, True, color)
+            self.screen.blit(txt, (ctrl_x + 10, ly))
+            ly += 22
 
     def draw_start_screen(self):
-        self.screen.fill(BLACK)
-        title = self.big_font.render("Safety First: Driving Simulator", True, PLAYER_BLUE)
-        prompt = self.font.render("Press SPACE to Start", True, TEXT)
-        
-        instr =[
-            "Controls:",
-            "Up/W : Accelerate   |   Down/S/Space : Brake",
-            "Left/A / Right/D : Steer Smoothly",
-            "Q : Left Blinker    |   E : Right Blinker",
-            "",
-            "Rules:",
-            "- Stay in your lane (Avoid straddling)",
-            "- Indicate (Q/E) when changing lanes",
-            "- Follow dynamic speed limits",
-            "- Stop at Red Lights",
-            "- Overtake NPCs safely on the Left",
-            "- Don't tailgate!"
+        # Dark themed title screen
+        self.screen.fill((18, 18, 20))
+        title = self.big_font.render("Safety First", True, PLAYER_COLOR)
+        subtitle = self.font.render("2D Driving Simulator", True, TEXT)
+
+        # Instruction panel
+        panel_w = 600
+        panel_h = 220
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((10, 10, 12, 220))
+        px = WIDTH//2 - panel_w//2
+        py = 220
+        self.screen.blit(panel, (px, py))
+
+        instr_lines = [
+            "Arrow keys to move lanes — avoid obstacles",
+            "Obey red lights — stop at crossings",
+            "Q/E to indicate when changing lanes",
         ]
-        
-        self.screen.blit(title, (WIDTH//2 - title.get_width()//2, 100))
-        self.screen.blit(prompt, (WIDTH//2 - prompt.get_width()//2, HEIGHT - 100))
-        
-        y = 200
-        for line in instr:
+
+        self.screen.blit(title, (WIDTH//2 - title.get_width()//2, 80))
+        self.screen.blit(subtitle, (WIDTH//2 - subtitle.get_width()//2, 150))
+
+        ly = py + 16
+        for line in instr_lines:
             r = self.font.render(line, True, TEXT)
-            self.screen.blit(r, (WIDTH//2 - r.get_width()//2, y))
-            y += 30
+            self.screen.blit(r, (px + 20, ly))
+            ly += 36
+
+        prompt = self.font.render("Press ENTER to Start", True, ACCENT)
+        self.screen.blit(prompt, (WIDTH//2 - prompt.get_width()//2, py + panel_h + 24))
 
     def draw_game_over(self):
-        self.screen.fill(ASPHALT)
-        title = self.big_font.render("GAME OVER - CRASHED!", True, DANGER)
-        subtitle = self.font.render("SAFETY REPORT", True, ACCENT)
-        prompt = self.font.render("Press SPACE to Restart", True, TEXT)
-        
-        report = [
-            f"Base Score: 100",
-            f"Lane Straddling Deductions: -{self.infractions['straddling']}",
-            f"Failure to Indicate Deductions: -{self.infractions['no_blinker']}",
-            f"Tailgating Deductions: -{self.infractions['tailgating']}",
-            f"Speeding Deductions: -{self.infractions['speeding']}",
-            f"Red Light Violations: -{self.infractions['red_light']}",
-            f"Clean Overtake Bonuses: +{self.bonuses['clean_overtake']}",
-            "-------------------------------------",
-            f"FINAL SAFETY SCORE: {self.safety_score}"
+        # Semi-transparent overlay
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((8, 8, 8, 180))
+        self.screen.blit(overlay, (0, 0))
+
+        box_w = 640
+        box_h = 420
+        box = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        box.fill((18, 18, 20, 230))
+        bx = WIDTH//2 - box_w//2
+        by = HEIGHT//2 - box_h//2
+        self.screen.blit(box, (bx, by))
+
+        title = self.big_font.render("GAME OVER", True, DANGER)
+        self.screen.blit(title, (WIDTH//2 - title.get_width()//2, by + 20))
+
+        final = self.font.render(f"Final Score: {self.safety_score}", True, TEXT)
+        best = self.font.render(f"High Score: {self.high_score}", True, ACCENT)
+        self.screen.blit(final, (bx + 30, by + 110))
+        self.screen.blit(best, (bx + 30, by + 150))
+
+        # Safety tips
+        tips = [
+            "1. Always signal before changing lanes.",
+            "2. Keep a safe following distance.",
+            "3. Obey traffic lights and signs.",
+            "4. Slow down in pedestrian areas.",
         ]
+        ty = by + 200
+        for t in tips:
+            t_surf = self.font.render(t, True, TEXT)
+            self.screen.blit(t_surf, (bx + 30, ty))
+            ty += 36
 
-        self.screen.blit(title, (WIDTH//2 - title.get_width()//2, 50))
-        self.screen.blit(subtitle, (WIDTH//2 - subtitle.get_width()//2, 120))
-        self.screen.blit(prompt, (WIDTH//2 - prompt.get_width()//2, HEIGHT - 60))
-
-        y = 170
-        for line in report:
-            color = TEXT
-            if "FINAL" in line: color = PLAYER_BLUE if self.safety_score > 50 else DANGER
-            r = self.font.render(line, True, color)
-            self.screen.blit(r, (WIDTH//2 - 200, y))
-            y += 35
+        prompt = self.font.render("Press R to Restart", True, ACCENT)
+        self.screen.blit(prompt, (WIDTH//2 - prompt.get_width()//2, by + box_h - 60))
 
 if __name__ == "__main__":
     game = Game()

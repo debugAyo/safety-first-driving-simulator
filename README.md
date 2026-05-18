@@ -2,6 +2,10 @@
 
 A 2D Pygame driving simulator focused on road safety. The game rewards good driving habits such as lane discipline, proper signaling, safe overtaking, and obeying speed limits and traffic lights.
 
+## Gameplay Demo
+
+![Gameplay Demo](Car_record.gif)
+
 ## Suggested GitHub Repo Name
 
 `safety-first-driving-simulator`
