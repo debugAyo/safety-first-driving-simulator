@@ -4,7 +4,7 @@ A 2D Pygame driving simulator focused on road safety. The game rewards good driv
 
 ## Gameplay Demo
 
-![Gameplay Demo](Car_record.gif)
+![Gameplay Demo](assests/Car_record.gif)
 
 ## Suggested GitHub Repo Name
 

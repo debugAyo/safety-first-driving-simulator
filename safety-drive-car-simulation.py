@@ -703,7 +703,7 @@ class Game:
         # Dark themed title screen
         self.screen.fill((18, 18, 20))
         title = self.big_font.render("Safety First", True, PLAYER_COLOR)
-        subtitle = self.font.render("2D Driving Simulator", True, TEXT)
+        subtitle = self.font.render("2D Driving Simulator :)", True, TEXT)
 
         # Instruction panel
         panel_w = 600
