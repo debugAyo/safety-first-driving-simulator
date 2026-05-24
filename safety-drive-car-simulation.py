@@ -330,7 +330,12 @@ class ConstructionZone:
 class Game:
     def __init__(self):
         pygame.init()
-        pygame.mixer.init()
+        try:
+            pygame.mixer.init()
+        except pygame.error as e:
+            print(f"Audio initialization failed: {e}. Continuing without sound.")
+            pygame.mixer = None
+        
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Safety First: 2D Driving Simulator")
         self.clock = pygame.time.Clock()
@@ -340,9 +345,9 @@ class Game:
         self.player_sprite = load_sprite("player_car.png", (40, 70), PLAYER_COLOR)
         self.npc_sprite = load_sprite("npc_car.png", (40, 70), NPC_RED)
         self.obstacle_sprite = load_sprite("obstacle.png", (24, 24), OBSTACLE_AMBER)
-        self.snd_honk = load_sound_any("honk")
-        self.snd_crash = load_sound_any("crash")
-        self.snd_powerup = load_sound_any("powerup")
+        self.snd_honk = load_sound_any("honk") if pygame.mixer else None
+        self.snd_crash = load_sound_any("crash") if pygame.mixer else None
+        self.snd_powerup = load_sound_any("powerup") if pygame.mixer else None
         
         pygame.joystick.init()
         self.joystick = None

@@ -139,3 +139,7 @@ git push -u origin main
 ```
 
 If your repository already exists on GitHub, replace the `origin` URL with your own repo link.
+
+## AI Disclosure
+
+This project was developed with assistance from GitHub Copilot (AI coding assistant). Copilot was used for code generation, bug fixes, feature implementation, and optimization throughout development.
