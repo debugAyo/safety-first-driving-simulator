@@ -79,11 +79,34 @@ If those files are missing, the game will fall back to simple shape-based graphi
 
 ## Optional Audio Assets
 
-Add these files to `assets/` for sound effects:
+Add these files to `assets/` for sound effects (OGG is preferred for web):
 
+- `assets/honk.ogg`
+- `assets/crash.ogg`
+- `assets/powerup.ogg`
 - `assets/honk.mp3`
 - `assets/crash.mp3`
 - `assets/powerup.mp3`
+
+## Web Demo (Pygbag)
+
+Pygame does not run in browsers natively. Use `pygbag` to build a web version.
+
+Install pygbag:
+
+```bash
+pip install pygbag
+```
+
+Build a web archive from this folder:
+
+```bash
+python -m pygbag --archive .
+```
+
+Upload the generated zip to itch.io (HTML project, "play in browser").
+
+Note: for best web audio support, use `.ogg`.
 
 ## File Structure
 

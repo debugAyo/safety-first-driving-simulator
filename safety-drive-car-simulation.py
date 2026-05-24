@@ -65,6 +65,14 @@ def load_sound(name):
     return None
 
 
+def load_sound_any(base_name):
+    for ext in (".ogg", ".mp3"):
+        snd = load_sound(base_name + ext)
+        if snd is not None:
+            return snd
+    return None
+
+
 class Particle:
     def __init__(self, pos, vel, color, life=40):
         self.x, self.y = pos
@@ -332,9 +340,9 @@ class Game:
         self.player_sprite = load_sprite("player_car.png", (40, 70), PLAYER_COLOR)
         self.npc_sprite = load_sprite("npc_car.png", (40, 70), NPC_RED)
         self.obstacle_sprite = load_sprite("obstacle.png", (24, 24), OBSTACLE_AMBER)
-        self.snd_honk = load_sound("honk.mp3")
-        self.snd_crash = load_sound("crash.mp3")
-        self.snd_powerup = load_sound("powerup.mp3")
+        self.snd_honk = load_sound_any("honk")
+        self.snd_crash = load_sound_any("crash")
+        self.snd_powerup = load_sound_any("powerup")
         
         pygame.joystick.init()
         self.joystick = None
@@ -426,17 +434,20 @@ class Game:
     def run(self):
         while True:
             dt = self.clock.tick(FPS) / 1000.0
-            self.handle_events()
-            
-            if self.state == "START":
-                self.draw_start_screen()
-            elif self.state == "PLAY":
-                self.update_play(dt)
-                self.draw_play()
-            elif self.state == "GAME_OVER":
-                self.draw_game_over()
-            
-            pygame.display.flip()
+            self.step(dt)
+
+    def step(self, dt):
+        self.handle_events()
+
+        if self.state == "START":
+            self.draw_start_screen()
+        elif self.state == "PLAY":
+            self.update_play(dt)
+            self.draw_play()
+        elif self.state == "GAME_OVER":
+            self.draw_game_over()
+
+        pygame.display.flip()
 
     
 
