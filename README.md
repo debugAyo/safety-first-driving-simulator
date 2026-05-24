@@ -4,7 +4,7 @@ A 2D Pygame driving simulator focused on road safety. The game rewards good driv
 
 ## Gameplay Demo
 
-![Gameplay Demo](assests/Car_record.gif)
+<video src="assets/Car_record.mp4" controls width="640"></video>
 
 ## Suggested GitHub Repo Name
 
@@ -41,7 +41,7 @@ pip install pygame
 From the project folder:
 
 ```bash
-python ai_studio_code.py
+python safety-drive-car-simulation.py
 ```
 
 If `python` is not available on your system, use the Python launcher or your installed Python path instead.
@@ -54,8 +54,9 @@ If `python` is not available on your system, use the Python launcher or your ins
 - `Right` or `D`: Steer right
 - `Q`: Toggle left blinker
 - `E`: Toggle right blinker
-- `Space` on the start screen: Start the game
-- `Space` on the game over screen: Restart
+- `H`: Honk
+- `Enter` on the start screen: Start the game
+- `R` on the game over screen: Restart
 
 ## Gameplay Rules
 
@@ -68,7 +69,7 @@ If `python` is not available on your system, use the Python launcher or your ins
 
 ## Optional Image Assets
 
-If you want the game to look more realistic, create an `assets` folder next to `ai_studio_code.py` and add these files:
+If you want the game to look more realistic, create an `assets` folder next to `safety-drive-car-simulation.py` and add these files:
 
 - `assets/player_car.png`
 - `assets/npc_car.png`
@@ -76,11 +77,19 @@ If you want the game to look more realistic, create an `assets` folder next to `
 
 If those files are missing, the game will fall back to simple shape-based graphics automatically.
 
+## Optional Audio Assets
+
+Add these files to `assets/` for sound effects:
+
+- `assets/honk.mp3`
+- `assets/crash.mp3`
+- `assets/powerup.mp3`
+
 ## File Structure
 
 ```text
 Game_simulation/
-  ai_studio_code.py
+  safety-drive-car-simulation.py
   README.md
   assets/
     player_car.png

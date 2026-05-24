@@ -16,11 +16,13 @@ ROAD_RIGHT = 650
 LANE_WIDTH = (ROAD_RIGHT - ROAD_LEFT) / 3
 LANE_CENTERS = [ROAD_LEFT + LANE_WIDTH * 0.5, ROAD_LEFT + LANE_WIDTH * 1.5, ROAD_LEFT + LANE_WIDTH * 2.5]
 DIVIDERS = [ROAD_LEFT + LANE_WIDTH, ROAD_LEFT + LANE_WIDTH * 2]
+LANE_INDEXES = [0, 1, 2]
 
 # Colors
 SKY = (24, 30, 36)
 # Polished palette (requested)
 ROAD_COLOR = (0x2a, 0x2a, 0x2a)       # #2a2a2a
+CONE_ORANGE = (235, 140, 40)
 LANE_YELLOW = (0xd4, 0xa0, 0x17)      # #d4a017
 GRASS = (24, 120, 35)
 ROAD_EDGE = (42, 42, 42)
@@ -33,6 +35,11 @@ PLAYER_COLOR = (0, 153, 255)          # #0099ff
 NPC_RED = (149, 57, 57)
 OBSTACLE_AMBER = (190, 130, 54)
 BLACK = (0, 0, 0)
+POWERUP_BLUE = (80, 200, 255)
+POWERUP_GREEN = (80, 220, 120)
+POWERUP_PURPLE = (170, 90, 220)
+
+POWERUP_TYPES = ["shield", "slowmo", "boost"]
 
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 
@@ -49,6 +56,13 @@ def load_sprite(name, size, fallback_color, colorkey=None):
     surface = pygame.Surface(size, pygame.SRCALPHA)
     surface.fill(fallback_color)
     return surface
+
+
+def load_sound(name):
+    path = os.path.join(ASSET_DIR, name)
+    if os.path.exists(path):
+        return pygame.mixer.Sound(path)
+    return None
 
 
 class Particle:
@@ -148,22 +162,51 @@ class NPC:
         self.width = 40
         self.height = 70
         self.x = x
+        self.lane = int((self.x - ROAD_LEFT) // LANE_WIDTH)
         self.y = y
         self.speed = speed
         self.passed = False  # Track if player overtook this NPC
         self.rect = pygame.Rect(self.x - self.width//2, self.y - self.height//2, self.width, self.height)
         self.sprite = sprite
+        self.crashed = False
+        self.crash_timer = 0.0
+        
 
     def update(self, dt, player_speed):
-        # NPC moves down screen based on player's speed vs NPC's speed
-        self.y += (player_speed - self.speed) * 3 * dt 
+        if self.crashed:
+            # Keep wrecks moving with traffic, then clear after timer
+            self.y += player_speed * 3 * dt
+            self.rect.center = (self.x, self.y)
+            self.crash_timer -= dt
+            return
+        self.y += (player_speed - self.speed) * 3 * dt
         self.rect.center = (self.x, self.y)
+    
+    def try_lane_change(self, target_lane):
+        if target_lane < 0 or target_lane > 2:
+            return
+        self.lane = target_lane
+        self.x = LANE_CENTERS[target_lane]
+        self.rect.centerx = self.x
+   
 
     def draw(self, screen):
         if self.sprite is not None:
             screen.blit(self.sprite, self.rect)
         else:
-            pygame.draw.rect(screen, NPC_RED, self.rect, border_radius=6)
+            color = DANGER if self.crashed else NPC_RED
+            pygame.draw.rect(screen, color, self.rect, border_radius=6)
+            if self.crashed:
+                # Simple wreckage overlay
+                pygame.draw.rect(screen, (30, 30, 30), self.rect.inflate(-8, -20), border_radius=4)
+                pygame.draw.line(screen, (80, 80, 80), self.rect.topleft, self.rect.bottomright, 2)
+                pygame.draw.line(screen, (80, 80, 80), self.rect.topright, self.rect.bottomleft, 2)
+                debris = [
+                    (self.rect.left - 6, self.rect.bottom - 4),
+                    (self.rect.left + 2, self.rect.bottom + 6),
+                    (self.rect.left + 10, self.rect.bottom - 2),
+                ]
+                pygame.draw.polygon(screen, (60, 60, 60), debris)
 
 class Obstacle:
     def __init__(self, x, y, sprite=None):
@@ -185,6 +228,32 @@ class Obstacle:
         else:
             pygame.draw.rect(screen, OBSTACLE_AMBER, self.rect, border_radius=4)
 
+class Powerup:
+    def __init__(self, x, y, kind, sprite=None):
+        self.kind = kind
+        self.width = 26
+        self.height = 26
+        self.x = x
+        self.y = y
+        self.rect = pygame.Rect(self.x - self.width//2, self.y - self.height//2, self.width, self.height)
+        self.sprite = sprite
+    
+    def update(self, dt, player_speed):
+        self.y += (player_speed) * 3 * dt
+        self.rect.center = (self.x, self.y)
+    def draw(self, screen):
+        if self.sprite is not None:
+            screen.blit(self.sprite, self.rect)
+        else:
+            color = POWERUP_BLUE
+            if self.kind == "shield":
+                color = POWERUP_GREEN
+            elif self.kind == "slowmo":
+                color = POWERUP_PURPLE
+            pygame.draw.circle(screen, color, self.rect.center, 12)
+            pygame.draw.circle(screen, (255, 255, 255), self.rect.center, 12, 2)
+
+
 class Crosswalk:
     def __init__(self, y_start):
         self.y = y_start
@@ -197,7 +266,7 @@ class Crosswalk:
     def update(self, dt, player_speed):
         self.y += (player_speed) * 3 * dt
         self.stop_line.top = self.y + self.height
-        
+
         self.timer += dt
         if self.state == "YELLOW" and self.timer > 2:
             self.state = "RED"
@@ -218,14 +287,34 @@ class Crosswalk:
         # Traffic Light box on the right side
         light_box = pygame.Rect(ROAD_RIGHT + 10, self.y, 30, 90)
         pygame.draw.rect(screen, ROAD_EDGE, light_box)
-        
+
         c_red = DANGER if self.state == "RED" else (60, 22, 22)
         c_yel = ACCENT if self.state == "YELLOW" else (70, 58, 18)
         c_grn = SAFE if self.state == "GREEN" else (18, 54, 29)
-        
+
         pygame.draw.circle(screen, c_red, (ROAD_RIGHT + 25, int(self.y) + 15), 10)
         pygame.draw.circle(screen, c_yel, (ROAD_RIGHT + 25, int(self.y) + 45), 10)
         pygame.draw.circle(screen, c_grn, (ROAD_RIGHT + 25, int(self.y) + 75), 10)
+
+class ConstructionZone:
+    def __init__(self, y_start):
+        self.y = y_start
+        self.height = 140
+        self.active = True
+        self.cones = []
+        # place cones in random lane positions
+        for _ in range(4):
+            lane = random.choice(LANE_CENTERS)
+            offset = random.randint(0, self.height - 20)
+            self.cones.append((lane, self.y + offset))
+    def update(self, dt, player_speed):
+        self.y += player_speed * 3 * dt
+        self.cones = [(x, y + player_speed * 3 * dt) for (x, y) in self.cones]
+    def draw(self, screen):
+        zone_rect = pygame.Rect(ROAD_LEFT, self.y, ROAD_RIGHT - ROAD_LEFT, self.height)
+        pygame.draw.rect(screen, (60, 60, 60), zone_rect)
+        for (x, y) in self.cones:
+            pygame.draw.polygon(screen, CONE_ORANGE, [(x-6, y+12), (x+6, y+12), (x, y-12)])
 
 # ==========================================
 # MAIN GAME MANAGER
@@ -233,6 +322,7 @@ class Crosswalk:
 class Game:
     def __init__(self):
         pygame.init()
+        pygame.mixer.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Safety First: 2D Driving Simulator")
         self.clock = pygame.time.Clock()
@@ -242,6 +332,9 @@ class Game:
         self.player_sprite = load_sprite("player_car.png", (40, 70), PLAYER_COLOR)
         self.npc_sprite = load_sprite("npc_car.png", (40, 70), NPC_RED)
         self.obstacle_sprite = load_sprite("obstacle.png", (24, 24), OBSTACLE_AMBER)
+        self.snd_honk = load_sound("honk.mp3")
+        self.snd_crash = load_sound("crash.mp3")
+        self.snd_powerup = load_sound("powerup.mp3")
         
         pygame.joystick.init()
         self.joystick = None
@@ -284,11 +377,23 @@ class Game:
         self.obstacles = []
         self.crosswalks =[]
         self.scroll_y = 0
+        self.powerups = []
+        self.powerup_timer = 0.0
+        self.base_max_speed = self.player.max_speed
+        self.zones = []
+        self.zone_timer = 0.0
         
+        # Powerup effects
+        self.shield_timer = 0.0
+        self.slowmo_timer = 0.0
+        self.boost_timer = 0.0
+
         # Spawning Timers
         self.npc_timer = 0
         self.obs_timer = 0
         self.crosswalk_timer = 0
+        self.obs_spawn_delay = random.uniform(8.0, 12.0)
+        self.crosswalk_spawn_delay = random.uniform(15.0, 20.0)
         
         # Safety Systems & Limits
         self.speed_limit = 50
@@ -333,6 +438,8 @@ class Game:
             
             pygame.display.flip()
 
+    
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -346,6 +453,8 @@ class Game:
                     self.reset_game()
                     self.state = "PLAY"
                 elif self.state == "PLAY":
+                    if event.key == pygame.K_h and self.snd_honk is not None:
+                        self.snd_honk.play()
                     # Indicator Toggles
                     if event.key == pygame.K_q:
                         self.player.blinker = -1 if self.player.blinker != -1 else 0
@@ -358,41 +467,141 @@ class Game:
     def update_play(self, dt):
         keys = pygame.key.get_pressed()
         self.player.update(dt, keys, self.joystick)
-        
+        speed_scale = 0.6 if self.slowmo_timer > 0 else 1.0
+        self.world_speed = self.player.speed * speed_scale
+        self.zone_timer += dt
+        if self.zone_timer > 20.0:
+            self.zone_timer = 0
+            self.zones.append(ConstructionZone(-200))
+
         # Background scroll
-        self.scroll_y += self.player.speed * 3 * dt
+        self.scroll_y += self.world_speed * 3 * dt
         if self.scroll_y >= 60:
             self.scroll_y -= 60
 
         # --- SPAWN LOGIC ---
         self.npc_timer += dt
-        if self.npc_timer > max(1.0, 3.0 - (self.player.speed / 100.0)):
+        if self.npc_timer > max(1.0, 3.0 - (self.world_speed / 100.0)):
             self.npc_timer = 0
             lane = random.choice(LANE_CENTERS)
             npc_speed = random.randint(30, 60)
             self.npcs.append(NPC(lane, -100, npc_speed, self.npc_sprite))
 
         self.obs_timer += dt
-        if self.obs_timer > 8.0:
+        if self.obs_timer > self.obs_spawn_delay:
             self.obs_timer = 0
+            self.obs_spawn_delay = random.uniform(8.0, 12.0)
             lane = random.choice(LANE_CENTERS) + random.randint(-20, 20)
             self.obstacles.append(Obstacle(lane, -100, self.obstacle_sprite))
+            
+        # Powerup spawn
+        self.powerup_timer += dt
+        if self.powerup_timer > 12.0:
+            self.powerup_timer = 0
+            lane = random.choice(LANE_CENTERS)
+            kind = random.choice(POWERUP_TYPES)
+            self.powerups.append(Powerup(lane, -120, kind))
 
         self.crosswalk_timer += dt
-        if self.crosswalk_timer > 15.0:
+        if self.crosswalk_timer > self.crosswalk_spawn_delay:
             self.crosswalk_timer = 0
+            self.crosswalk_spawn_delay = random.uniform(15.0, 20.0)
             self.crosswalks.append(Crosswalk(-200))
 
         # --- UPDATE ENTITIES ---
         for npc in self.npcs[:]:
-            npc.update(dt, self.player.speed)
-            if npc.y > HEIGHT + 100: self.npcs.remove(npc)
+            npc.update(dt, self.world_speed)
+            if npc.y > HEIGHT + 100:
+                self.npcs.remove(npc)
+            elif npc.crashed and npc.crash_timer <= 0:
+                self.npcs.remove(npc)
+        for npc in self.npcs:
+            if npc.crashed and random.random() < 0.2:
+                sx = npc.rect.centerx + random.uniform(-8, 8)
+                sy = npc.rect.top + random.uniform(-6, 6)
+                vx = random.uniform(-0.5, 0.5)
+                vy = random.uniform(-2.0, -0.5)
+                self.particles.append(Particle((sx, sy), (vx, vy), (140, 140, 140), life=30))
         for obs in self.obstacles[:]:
-            obs.update(dt, self.player.speed)
+            obs.update(dt, self.world_speed)
             if obs.y > HEIGHT + 100: self.obstacles.remove(obs)
         for cw in self.crosswalks[:]:
-            cw.update(dt, self.player.speed)
+            cw.update(dt, self.world_speed)
             if cw.y > HEIGHT + 100: self.crosswalks.remove(cw)
+        for z in self.zones[:]:
+            z.update(dt, self.world_speed)
+            if z.y > HEIGHT + 200:
+                self.zones.remove(z)
+        for p in self.powerups[:]:
+            p.update(dt, self.world_speed)
+            if p.y > HEIGHT + 100:
+                self.powerups.remove(p)
+        if self.shield_timer > 0:
+            self.shield_timer -=dt
+        if self.slowmo_timer > 0:
+            self.slowmo_timer -= dt
+        if self.boost_timer > 0:
+            self.boost_timer -=dt
+        if self.boost_timer > 0:
+            self.player.max_speed = self.base_max_speed + 30
+            self.player.speed = min(self.player.speed + 40 * dt, self.player.max_speed)
+        else:
+            self.player.max_speed = self.base_max_speed
+        
+        def lane_clear(target_lane, ref_y):
+            lane_x = LANE_CENTERS[target_lane]
+            for other in self.npcs:
+                if other.lane != target_lane:
+                    continue
+                if abs(other.y - ref_y) < 140:
+                    return False
+            for obs in self.obstacles:
+                if abs(obs.x - lane_x) < LANE_WIDTH / 3 and 0 < (obs.y - ref_y) < 140:
+                    return False
+            return True
+
+        for npc in self.npcs:
+            if npc.crashed:
+                continue
+            hazard_ahead = False
+            for other in self.npcs:
+                if other is npc:
+                    continue
+                same_lane = abs(other.x - npc.x) < LANE_WIDTH / 3
+                ahead = 0 < (other.y - npc.y) < 140
+                if same_lane and ahead:
+                    hazard_ahead = True
+                    break
+            if not hazard_ahead:
+                for obs in self.obstacles:
+                    same_lane = abs(obs.x - npc.x) < LANE_WIDTH / 3
+                    ahead = 0 < (obs.y - npc.y) < 140
+                    if same_lane and ahead:
+                        hazard_ahead = True
+                        break
+            if hazard_ahead:
+                if npc.lane > 0 and lane_clear(npc.lane - 1, npc.y):
+                    npc.try_lane_change(npc.lane - 1)
+                elif npc.lane < 2 and lane_clear(npc.lane + 1, npc.y):
+                    npc.try_lane_change(npc.lane + 1)
+        
+        for p in self.powerups[:]:
+            if self.player.rect.colliderect(p.rect):
+                if p.kind == "shield":
+                    self.shield_timer = 6.0
+                    self.add_message("Shield Activate!", SAFE)
+                elif p.kind == "slowmo":
+                    self.slowmo_timer = 5.0
+                    self.add_message("Slow Motion!", POWERUP_PURPLE)
+                elif p.kind == "boost":
+                    self.boost_timer = 5.0
+                    self.add_message("Speed Boost!", ACCENT)
+                if self.snd_powerup is not None:
+                    self.snd_powerup.play()
+                self.powerups.remove(p)
+
+
+        self.check_npc_collisions()
 
         # --- SAFETY SYSTEMS LOGIC ---
         self.check_lane_discipline(dt)
@@ -422,6 +631,15 @@ class Game:
             if cw.state == "RED" and -200 < cw.y < HEIGHT:
                 self.red_light_active = True
                 break
+        # Construction Zone speed Limit Override
+        in_zone = False
+        for z in self.zones:
+            if z.y < self.player.y < z.y + z.height:
+                in_zone = True
+                break
+        if in_zone:
+            self.speed_limit = min(self.speed_limit, 30)
+
         # Pulse value
         if self.red_light_active:
             self.red_pulse += dt * 3.0
@@ -438,6 +656,26 @@ class Game:
                     self.save_high_score()
                 self.state = "GAME_OVER"
                 return
+    
+    def check_npc_collisions(self):
+        for i in range(len(self.npcs)):
+            for j in range(i + 1, len(self.npcs)):
+                a = self.npcs[i]
+                b = self.npcs[j]
+                if a.crashed or b.crashed:
+                    continue
+                if a.rect.colliderect(b.rect):
+                    a.crashed = True
+                    b.crashed = True
+                    a.crash_timer = 3.0
+                    b.crash_timer = 3.0
+
+                    cx, cy = a.rect.centerx, a.rect.centery
+                    for _ in range(30):
+                        vx = random.uniform(-5, 5)
+                        vy = random.uniform(-5, 2)
+                        col = random.choice([NPC_RED, OBSTACLE_AMBER])
+                        self.particles.append(Particle((cx, cy), (vx, vy), col, life=40))
 
     def check_lane_discipline(self, dt):
         # Identify current lane (0, 1, 2)
@@ -524,7 +762,15 @@ class Game:
                     vy = random.uniform(-4, 2)
                     col = random.choice([PLAYER_COLOR, NPC_RED, OBSTACLE_AMBER])
                     self.particles.append(Particle((cx, cy), (vx, vy), col, life=40))
+                if self.shield_timer > 0:
+                    self.shield_timer = 0
+                    self.add_message("Shield Saved You!", SAFE)
+                    self.npcs.remove(npc)
+                    return
+
                 # preserve existing behavior
+                if self.snd_crash is not None:
+                    self.snd_crash.play()
                 if self.safety_score > self.high_score:
                     self.high_score = int(self.safety_score)
                     self.save_high_score()
@@ -538,11 +784,21 @@ class Game:
                     vy = random.uniform(-5, 1)
                     col = random.choice([PLAYER_COLOR, OBSTACLE_AMBER])
                     self.particles.append(Particle((cx, cy), (vx, vy), col, life=40))
+                if self.shield_timer > 0:
+                    self.shield_timer = 0
+                    self.add_message("Shield Saved You!", SAFE)
+                    self.obstacles.remove(obs)
+                    return
+
+                if self.snd_crash is not None:
+                    self.snd_crash.play()
                 if self.safety_score > self.high_score:
                     self.high_score = int(self.safety_score)
                     self.save_high_score()
                 self.state = "GAME_OVER"
                 return
+
+               
                 
         # Intersection Stop Line (Ran Red Light)
         for cw in self.crosswalks:
@@ -553,6 +809,9 @@ class Game:
                 cw.penalized = True
 
     def draw_play(self):
+        for z in self.zones:
+            z.draw(self.screen)
+
         # Sky sidebars
         self.screen.fill(SKY)
 
@@ -574,9 +833,14 @@ class Game:
                 pygame.draw.line(self.screen, LANE_YELLOW, (div_x, y1), (div_x, y1 + 30), 6)
 
         # Crosswalks and entities
-        for cw in self.crosswalks: cw.draw(self.screen)
-        for obs in self.obstacles: obs.draw(self.screen)
-        for npc in self.npcs: npc.draw(self.screen)
+        for cw in self.crosswalks:
+            cw.draw(self.screen)
+        for obs in self.obstacles:
+            obs.draw(self.screen)
+        for p in self.powerups:
+            p.draw(self.screen)
+        for npc in self.npcs:
+            npc.draw(self.screen)
         self.player.draw(self.screen)
 
         # Particles (on top of entities)
@@ -650,6 +914,15 @@ class Game:
         if self.tailgating_active:
             warning_surf = self.big_font.render("TAILGATING WARNING!", True, DANGER)
             self.screen.blit(warning_surf, (WIDTH//2 - warning_surf.get_width()//2, HEIGHT//2 - 100))
+        
+        active = []
+        if self.shield_timer > 0: active.append("SHIELD")
+        if self.slowmo_timer > 0: active.append("SLOW")
+        if self.boost_timer > 0: active.append("BOOST")
+        if active:
+            txt = self.font.render("POWER: " + " | ".join(active), True, ACCENT)
+            self.screen.blit(txt, (WIDTH//2 - txt.get_width()//2, 16))
+        
 
         # Floating Messages
         y_offset = 100
@@ -700,37 +973,62 @@ class Game:
             ly += 22
 
     def draw_start_screen(self):
-        # Dark themed title screen
-        self.screen.fill((18, 18, 20))
-        title = self.big_font.render("Safety First", True, PLAYER_COLOR)
-        subtitle = self.font.render("2D Driving Simulator :)", True, TEXT)
+        # Dashboard-style title screen
+        for y in range(HEIGHT):
+            shade = 16 + int(20 * (y / HEIGHT))
+            self.screen.fill((shade, shade + 2, shade + 4), rect=pygame.Rect(0, y, WIDTH, 1))
 
-        # Instruction panel
-        panel_w = 600
-        panel_h = 220
+        # Dashboard arc
+        dash_rect = pygame.Rect(80, 120, WIDTH - 160, HEIGHT - 140)
+        pygame.draw.ellipse(self.screen, (22, 22, 26), dash_rect)
+        pygame.draw.ellipse(self.screen, (36, 36, 42), dash_rect, 4)
+
+        # Speedometer
+        center = (WIDTH // 2, HEIGHT // 2 + 40)
+        pygame.draw.circle(self.screen, (12, 12, 16), center, 140)
+        pygame.draw.circle(self.screen, (60, 60, 70), center, 140, 4)
+        for i in range(0, 181, 20):
+            angle = math.radians(180 + i)
+            x1 = center[0] + int(math.cos(angle) * 120)
+            y1 = center[1] + int(math.sin(angle) * 120)
+            x2 = center[0] + int(math.cos(angle) * 135)
+            y2 = center[1] + int(math.sin(angle) * 135)
+            pygame.draw.line(self.screen, (90, 90, 100), (x1, y1), (x2, y2), 3)
+
+        # Needle
+        t = pygame.time.get_ticks() / 1000.0
+        needle_angle = math.radians(210 + 30 * math.sin(t))
+        nx = center[0] + int(math.cos(needle_angle) * 90)
+        ny = center[1] + int(math.sin(needle_angle) * 90)
+        pygame.draw.line(self.screen, ACCENT, center, (nx, ny), 4)
+        pygame.draw.circle(self.screen, ACCENT, center, 6)
+
+        title = self.big_font.render("Safety First", True, TEXT)
+        subtitle = self.font.render("Driving Simulator", True, ACCENT)
+        self.screen.blit(title, (WIDTH//2 - title.get_width()//2, 60))
+        self.screen.blit(subtitle, (WIDTH//2 - subtitle.get_width()//2, 105))
+
+        panel_w = 620
+        panel_h = 180
         panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        panel.fill((10, 10, 12, 220))
+        panel.fill((10, 10, 12, 210))
         px = WIDTH//2 - panel_w//2
-        py = 220
+        py = HEIGHT - panel_h - 40
         self.screen.blit(panel, (px, py))
 
         instr_lines = [
-            "Arrow keys to move lanes — avoid obstacles",
-            "Obey red lights — stop at crossings",
-            "Q/E to indicate when changing lanes",
+            "Steer: Left / Right or A / D",
+            "Accelerate: Up / W    Brake: Down / S / Space",
+            "Signals: Q / E   Follow speed limits and lights",
         ]
-
-        self.screen.blit(title, (WIDTH//2 - title.get_width()//2, 80))
-        self.screen.blit(subtitle, (WIDTH//2 - subtitle.get_width()//2, 150))
-
-        ly = py + 16
+        ly = py + 18
         for line in instr_lines:
             r = self.font.render(line, True, TEXT)
             self.screen.blit(r, (px + 20, ly))
-            ly += 36
+            ly += 32
 
-        prompt = self.font.render("Press ENTER to Start", True, ACCENT)
-        self.screen.blit(prompt, (WIDTH//2 - prompt.get_width()//2, py + panel_h + 24))
+        prompt = self.font.render("Press ENTER to Start", True, PLAYER_COLOR)
+        self.screen.blit(prompt, (WIDTH//2 - prompt.get_width()//2, py + panel_h - 40))
 
     def draw_game_over(self):
         # Semi-transparent overlay
