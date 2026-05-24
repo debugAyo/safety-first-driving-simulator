@@ -142,4 +142,4 @@ If your repository already exists on GitHub, replace the `origin` URL with your 
 
 ## AI Disclosure
 
-This project was developed with assistance from GitHub Copilot (AI coding assistant). Copilot was used for code generation, bug fixes, feature implementation, and optimization throughout development.
+This project was developed with assistance from GitHub Copilot (AI coding assistant). Copilot was used for debugging collision physics, implementing NPC lane-change AI with pathfinding, particle effects, audio integration, and building/packaging the game for distribution.
