@@ -121,7 +121,7 @@ class NPC:
         if target_lane < 0 or target_lane > 2:
             return
         self.lane = target_lane
-        self.x = LANE_CENTERS[target_lane]
+        self.x = LANE_CENTER[target_lane]
         self.rect.centerx = self.x
    
 

@@ -199,416 +199,6 @@ class ConstructionZone:
         pygame.draw.rect(screen, (60, 60, 60), zone_rect)
         for (x, y) in self.cones:
             pygame.draw.polygon(screen, CONE_ORANGE, [(x-6, y+12), (x+6, y+12), (x, y-12)])
-
-
-# ------------------------------
-# Driving School Prototype
-# ------------------------------
-class DrivingVehicle:
-    def __init__(self, x, y, angle=0.0):
-        self.x = x
-        self.y = y
-        self.angle = angle  # radians
-        self.speed = 0.0
-        self.length = 46.0
-        self.max_steer = math.radians(30)
-        self.steer = 0.0
-        self.wheel_spin = 0.0
-        self.body_bob = 0.0
-
-    def update(self, dt, accel_input, steer_input):
-        # Simple kinematic update
-        accel = accel_input * 120.0
-        # apply accel
-        self.speed += accel * dt
-        # damping
-        self.speed *= (1.0 - 3.0 * dt)
-        # limit speed
-        self.speed = max(-40.0, min(80.0, self.speed))
-
-        # steering input in [-1,1]
-        self.steer = steer_input * self.max_steer
-
-        # Kinematic bicycle-like turn: change angle proportional to steer and forward speed
-        if abs(self.speed) > 0.5:
-            turn = (self.speed / self.length) * math.tan(self.steer)
-            self.angle += turn * dt
-
-        # motion cues for sprite animation
-        self.wheel_spin += self.speed * dt * 10.0
-        self.body_bob = 0.8 * math.sin(self.wheel_spin * 0.08)
-
-        # update position
-        self.x += math.cos(self.angle) * self.speed * dt
-        self.y += math.sin(self.angle) * self.speed * dt
-
-
-class DrivingSchool:
-    LEVELS = [
-        {
-            "name": "Level 1 - Parallel Parking",
-            "task": "parallel_parking",
-            "objective": "Park cleanly in the bay and hold still.",
-            "rules": [
-                "Use low speed only.",
-                "Stop fully inside the marked bay.",
-                "Hold position for 1.5 seconds.",
-            ],
-            "pass_mark": 78,
-            "thumbnail": "parking",
-        },
-        {
-            "name": "Level 2 - Three-Point Turn",
-            "task": "three_point",
-            "objective": "Turn around using forward and reverse stages.",
-            "rules": [
-                "Use reverse carefully.",
-                "Complete all three stages in order.",
-                "Do not leave the practice lane.",
-            ],
-            "pass_mark": 75,
-            "thumbnail": "turn",
-        },
-        {
-            "name": "Level 3 - Road Rules",
-            "task": "road_rules",
-            "objective": "Drive through checkpoints while following the rules.",
-            "rules": [
-                "Stay inside the lane.",
-                "Signal before lane changes.",
-                "Brake for the stop zone.",
-            ],
-            "pass_mark": 70,
-            "thumbnail": "rules",
-        },
-    ]
-
-    def __init__(self, game, level_index=0):
-        self.game = game
-        # arena coordinates (top-left origin)
-        self.w = 500
-        self.h = 520
-        self.x = 20
-        self.y = 60
-        # vehicle sprite (real image instead of a drawn shape)
-        self.vehicle_sprite = game.school_car_sprite or game.player_sprite
-        # level / rules data
-        self.levels = [dict(level) for level in self.LEVELS]
-        self.level_index = max(0, min(level_index, len(self.levels) - 1))
-        self.task = self.levels[self.level_index]["task"]
-        self.timer = 0.0
-        self.score = 100
-        self.message = ""
-        self.level_message = ""
-        self.completed_levels = 0
-        self.finished = False
-        self.vehicle = None
-        self.park_rect = None
-        self.tp_forward = None
-        self.tp_reverse = None
-        self.tp_final = None
-        self.tp_stage = 0
-        self.park_hold = 0.0
-        self.rules_broken = 0
-        self.rule_timer = 0.0
-        self.off_course_cooldown = 0.0
-        self.checkpoints = []
-        self.checkpoint_index = 0
-        self.current_rules = []
-        self.current_objective = ""
-        self.last_grade = None
-        self.last_grade_notes = ""
-        self.last_stars = 0
-        self.reverse_distance = 0.0
-        self.forward_distance = 0.0
-        self.boundary_hits = 0
-        self.current_passed = False
-        self.pending_result = None
-        self._build_level()
-
-    def reset(self):
-        self.__init__(self.game, self.level_index)
-
-    def _build_level(self):
-        level = self.levels[self.level_index]
-        self.task = level["task"]
-        self.current_rules = level["rules"]
-        self.current_objective = level["objective"]
-        self.message = ""
-        self.level_message = level["name"]
-        self.timer = 0.0
-        self.rule_timer = 0.0
-        self.rules_broken = 0
-        self.off_course_cooldown = 0.0
-        self.vehicle = DrivingVehicle(self.x + 120, self.y + self.h - 120, angle=-math.pi/2)
-        self.park_hold = 0.0
-        self.tp_stage = 0
-        self.checkpoint_index = 0
-        self.last_grade = None
-        self.last_grade_notes = ""
-        self.last_stars = 0
-        self.reverse_distance = 0.0
-        self.forward_distance = 0.0
-        self.boundary_hits = 0
-        self.current_passed = False
-        self.pending_result = None
-
-        if self.task == "parallel_parking":
-            # wider bay for clearer visual target (width 140, height 110)
-            self.park_rect = pygame.Rect(self.x + 260, self.y + self.h - 130, 140, 110)
-            self.tp_forward = None
-            self.tp_reverse = None
-            self.tp_final = None
-            self.checkpoints = []
-        elif self.task == "three_point":
-            self.park_rect = None
-            self.tp_forward = pygame.Rect(self.x + 180, self.y + 80, 120, 80)
-            self.tp_reverse = pygame.Rect(self.x + 180, self.y + 220, 120, 80)
-            self.tp_final = pygame.Rect(self.x + 180, self.y + 360, 120, 80)
-            self.checkpoints = []
-        else:
-            self.park_rect = None
-            self.tp_forward = None
-            self.tp_reverse = None
-            self.tp_final = None
-            # road rules checkpoints: simple lane/stop practice path
-            self.checkpoints = [
-                pygame.Rect(self.x + 100, self.y + 110, 120, 60),
-                pygame.Rect(self.x + 220, self.y + 220, 120, 60),
-                pygame.Rect(self.x + 320, self.y + 330, 120, 60),
-            ]
-
-    def _vehicle_rect(self):
-        vpos = pygame.Rect(0, 0, 44, 24)
-        vpos.center = (int(self.vehicle.x), int(self.vehicle.y))
-        return vpos
-
-    def _render_vehicle_sprite(self):
-        base = self.vehicle_sprite
-        if base is None:
-            w = 40
-            h = 20
-            base = pygame.Surface((w, h), pygame.SRCALPHA)
-            pygame.draw.rect(base, PLAYER_COLOR, (0, 0, w, h), border_radius=4)
-
-        car = base.copy()
-        wheel_positions = [(10, 58), (30, 58)]
-        for wx, wy in wheel_positions:
-            pygame.draw.circle(car, (25, 25, 25), (wx, wy), 5)
-            pygame.draw.circle(car, (95, 95, 95), (wx, wy), 4, 1)
-            spin_angle = self.vehicle.wheel_spin
-            px = wx + math.cos(spin_angle) * 4
-            py = wy + math.sin(spin_angle) * 4
-            pygame.draw.line(car, (220, 220, 220), (wx, wy), (px, py), 1)
-            pygame.draw.line(car, (220, 220, 220), (wx, wy), (wx - math.cos(spin_angle) * 4, wy - math.sin(spin_angle) * 4), 1)
-
-        if self.vehicle.speed > 0.5:
-            pygame.draw.polygon(car, (255, 255, 255, 120), [(8, 22), (14, 18), (14, 26)])
-        elif self.vehicle.speed < -0.5:
-            pygame.draw.polygon(car, (255, 255, 255, 120), [(32, 22), (26, 18), (26, 26)])
-
-        tilt = math.degrees(self.vehicle.angle) * -1
-        if self.vehicle.steer != 0:
-            tilt += max(-6, min(6, math.degrees(self.vehicle.steer) * 0.18))
-        rotated = pygame.transform.rotozoom(car, tilt, 1.0)
-        return rotated
-
-    def _record_motion(self, dt):
-        distance = abs(self.vehicle.speed) * dt
-        if self.vehicle.speed >= 0:
-            self.forward_distance += distance
-        else:
-            self.reverse_distance += distance
-
-    def _grade_parallel_parking(self):
-        angle_error_deg = abs(math.degrees(wrap_angle(self.vehicle.angle + math.pi / 2)))
-        center_error = math.hypot(self.vehicle.x - self.park_rect.centerx, self.vehicle.y - self.park_rect.centery)
-        reverse_shortfall = max(0.0, 20.0 - self.reverse_distance)
-        score = 100.0
-        score -= angle_error_deg * 2.5
-        score -= center_error * 0.8
-        score -= self.boundary_hits * 20.0
-        score -= reverse_shortfall * 2.0
-        score -= max(0.0, self.forward_distance - self.reverse_distance) * 0.8
-        grade = max(0, min(100, int(score)))
-        notes = f"Angle {angle_error_deg:.1f}°, center {center_error:.1f}px, reverse {self.reverse_distance:.1f}"
-        return grade, notes, angle_error_deg, center_error
-
-    def _grade_three_point(self):
-        reversal_bonus = min(1.0, self.reverse_distance / 18.0)
-        score = 100.0
-        score -= self.boundary_hits * 15.0
-        score -= max(0.0, 12.0 - self.reverse_distance) * 2.0
-        score -= max(0.0, self.forward_distance - self.reverse_distance) * 0.5
-        score += reversal_bonus * 10.0
-        grade = max(0, min(100, int(score)))
-        notes = f"Reverse {self.reverse_distance:.1f}, forward {self.forward_distance:.1f}"
-        return grade, notes
-
-    def _grade_road_rules(self):
-        score = 100.0
-        score -= self.boundary_hits * 12.0
-        score -= self.rules_broken * 10.0
-        score -= max(0.0, 8.0 - self.reverse_distance) * 1.5
-        grade = max(0, min(100, int(score)))
-        notes = f"Rules broken {self.rules_broken}, off-course {self.boundary_hits}"
-        return grade, notes
-
-    def _complete_level(self, grade, notes):
-        self.last_grade = grade
-        self.last_grade_notes = notes
-        self.last_stars = self.grade_to_stars(grade)
-        self.score += grade
-        pass_mark = self.levels[self.level_index].get("pass_mark", 70)
-        if grade >= pass_mark:
-            self.current_passed = True
-            self.message = f"Level passed: {grade}/100"
-            next_level_index = self.level_index + 1 if self.level_index + 1 < len(self.levels) else None
-            self.pending_result = {
-                "level_name": self.levels[self.level_index]["name"],
-                "passed": True,
-                "grade": grade,
-                "stars": self.last_stars,
-                "notes": notes,
-                "next_level_index": next_level_index,
-                "level_index": self.level_index,
-                "finished": next_level_index is None,
-            }
-        else:
-            self.current_passed = False
-            self.message = f"Grade {grade}/100 below pass mark {pass_mark}"
-            self.pending_result = {
-                "level_name": self.levels[self.level_index]["name"],
-                "passed": False,
-                "grade": grade,
-                "stars": self.last_stars,
-                "notes": notes,
-                "next_level_index": self.level_index,
-                "level_index": self.level_index,
-                "finished": False,
-            }
-
-    def _fail_level(self, reason):
-        self.last_grade = 0
-        self.last_grade_notes = reason
-        self.last_stars = 0
-        self.message = reason
-        self.score = max(0, self.score - 20)
-        self.pending_result = {
-            "level_name": self.levels[self.level_index]["name"],
-            "passed": False,
-            "grade": 0,
-            "stars": 0,
-            "notes": reason,
-            "next_level_index": self.level_index,
-            "level_index": self.level_index,
-            "finished": False,
-        }
-
-    def next_level(self):
-        self.completed_levels += 1
-        self.score += 60
-        if self.level_index + 1 < len(self.levels):
-            self.level_index += 1
-            self._build_level()
-            self.level_message = f"Unlocked: {self.levels[self.level_index]['name']}"
-        else:
-            self.finished = True
-            self.level_message = "All driving school levels complete!"
-            self.message = "Driving School Passed!"
-
-    @staticmethod
-    def grade_to_stars(grade):
-        if grade >= 90:
-            return 3
-        if grade >= 75:
-            return 2
-        if grade >= 60:
-            return 1
-        return 0
-
-    def update(self, dt):
-        if self.finished:
-            return
-        keys = pygame.key.get_pressed()
-        # controls: W accelerate, S reverse, A/D steer
-        accel = 0.0
-        steer = 0.0
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
-            accel = 1.0
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            accel = -1.0
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            steer = -1.0
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            steer = 1.0
-
-        self.vehicle.update(dt, accel, steer)
-        self._record_motion(dt)
-        self.timer += dt
-        self.rule_timer += dt
-        if self.off_course_cooldown > 0.0:
-            self.off_course_cooldown = max(0.0, self.off_course_cooldown - dt)
-
-        # simple collision with arena bounds
-        if not (self.x + 8 < self.vehicle.x < self.x + self.w - 8 and self.y + 8 < self.vehicle.y < self.y + self.h - 8):
-            self.score -= int(10 * dt)
-            self.message = "Off course! Get back inside."
-            if self.off_course_cooldown <= 0.0:
-                self.rules_broken += 1
-                self.boundary_hits += 1
-                self.off_course_cooldown = 0.35
-        else:
-            self.message = ""
-
-        # basic rule reminder / enforcement
-        if self.task == "road_rules" and self.rule_timer > 4.0:
-            self.rule_timer = 0.0
-            self.message = "Remember: signal before changing lanes."
-
-        # Task checks
-        if self.task == "parallel_parking":
-            # require the car center to be in the bay and the car to be nearly still
-            parked_center = self.park_rect.inflate(-12, -12)
-            if parked_center.collidepoint(self.vehicle.x, self.vehicle.y) and abs(self.vehicle.speed) < 3.5:
-                self.park_hold += dt
-            else:
-                self.park_hold = 0.0
-            if self.park_hold > 1.5:
-                grade, notes, angle_error_deg, center_error = self._grade_parallel_parking()
-                if self.reverse_distance < 12.0:
-                    self._fail_level("Use reverse more accurately before finishing.")
-                elif angle_error_deg > 14.0:
-                    self._fail_level("Parking angle is too wide. Straighten the car.")
-                elif center_error > 20.0:
-                    self._fail_level("Not centered enough in the bay.")
-                else:
-                    self._complete_level(grade, notes)
-        elif self.task == "three_point":
-            vpos = self._vehicle_rect()
-            if self.tp_stage == 0 and self.tp_forward.colliderect(vpos):
-                self.tp_stage = 1
-                self.message = "Stage 1 complete: Reverse into gap"
-            elif self.tp_stage == 1 and self.tp_reverse.colliderect(vpos) and self.vehicle.speed < 1.0:
-                self.tp_stage = 2
-                self.message = "Stage 2 complete: Finish forward"
-            elif self.tp_stage == 2 and self.tp_final.colliderect(vpos):
-                grade, notes = self._grade_three_point()
-                if self.reverse_distance < 10.0:
-                    self._fail_level("Use a cleaner reverse during the turn.")
-                else:
-                    self._complete_level(grade, notes)
-        elif self.task == "road_rules":
-            if self.checkpoints and self.checkpoint_index < len(self.checkpoints):
-                vpos = self._vehicle_rect()
-                if self.checkpoints[self.checkpoint_index].colliderect(vpos):
-                    self.checkpoint_index += 1
-                    self.score += 40
-                    self.message = f"Checkpoint {self.checkpoint_index} passed"
-                    if self.checkpoint_index >= len(self.checkpoints):
-                        grade, notes = self._grade_road_rules()
-                        self._complete_level(grade, notes)
-
     def draw(self, surf):
         # arena
         pygame.draw.rect(surf, (20, 24, 28), (self.x, self.y, self.w, self.h))
@@ -767,7 +357,6 @@ class Game:
         self.big_font = pygame.font.SysFont("Arial", 48, bold=True)
 
         self.player_sprite = load_sprite("player_car.png", (40, 70), PLAYER_COLOR)
-        self.school_car_sprite = load_sprite("player_car.png", (40, 70), PLAYER_COLOR)
         self.npc_sprite = load_sprite("npc_car.png", (40, 70), NPC_RED)
         self.obstacle_sprite = load_sprite("obstacle.png", (24, 24), OBSTACLE_AMBER)
         self.snd_honk = load_sound_any("honk") if pygame.mixer else None
@@ -781,7 +370,6 @@ class Game:
             self.joystick.init()
 
         self.state = "START"
-        self.school_select_index = 0
         # UI / runtime state
         self.display_score = 100.0
         self.particles = []
@@ -793,14 +381,8 @@ class Game:
         # Pause menu mouse state
         self.pause_buttons = []
         self.pause_hover = -1
-        self.school_select_cards = []
-        self.school_select_start_button = None
-        self.school_select_back_button = None
-        self.school_result = None
         # Ensure the system mouse cursor is visible
         pygame.mouse.set_visible(True)
-        # Driving school mode instance
-        self.school = None
         # Music settings (initialize before any event handlers use them)
         try:
             self.music_path = load_music("theme")
@@ -937,10 +519,6 @@ class Game:
         # reset pause UI state
         self.pause_buttons = []
         self.pause_hover = -1
-        # clear driving school
-        self.school = None
-        # clear driving school
-        self.school = None
 
     def run(self):
         while True:
@@ -952,8 +530,6 @@ class Game:
 
         if self.state == "START":
             self.draw_start_screen()
-        elif self.state == "DRIVING_SCHOOL_SELECT":
-            self.draw_driving_school_select()
         elif self.state == "PLAY":
             self.update_play(dt)
             self.draw_play()
@@ -961,18 +537,6 @@ class Game:
             # Render the current play frame but do not update game logic
             self.draw_play()
             self.draw_pause_menu()
-        elif self.state == "DRIVING_SCHOOL":
-            if self.school is not None:
-                self.school.update(dt)
-                if self.school.pending_result is not None:
-                    self.school_result = self.school.pending_result
-                    self.school.pending_result = None
-                    self.state = "DRIVING_SCHOOL_RESULTS"
-                self.school.draw(self.screen)
-        elif self.state == "DRIVING_SCHOOL_RESULTS":
-            if self.school is not None:
-                self.school.draw(self.screen)
-            self.draw_driving_school_results()
         elif self.state == "GAME_OVER":
             self.draw_game_over()
 
@@ -1019,45 +583,6 @@ class Game:
                             elif label.startswith("Music"):
                                 self.toggle_music()
                             break
-                elif self.state == "DRIVING_SCHOOL_SELECT" and event.button == 1:
-                    mx, my = event.pos
-                    card_w = 360
-                    card_h = 120
-                    gap = 18
-                    start_y = 120
-                    for i in range(3):
-                        x = WIDTH // 2 - card_w // 2
-                        y = start_y + i * (card_h + gap)
-                        rect = pygame.Rect(x, y, card_w, card_h)
-                        if rect.collidepoint(mx, my):
-                            self.school_select_index = i
-                            break
-                    if self.school_select_start_button and self.school_select_start_button.collidepoint(mx, my):
-                        self.school = DrivingSchool(self, level_index=self.school_select_index)
-                        self.state = "DRIVING_SCHOOL"
-                        if self.music_on:
-                            self.start_music()
-                    elif self.school_select_back_button and self.school_select_back_button.collidepoint(mx, my):
-                        self.state = "START"
-                elif self.state == "DRIVING_SCHOOL_RESULTS" and event.button == 1:
-                    mx, my = event.pos
-                    if getattr(self, "school_results_next_button", None) and self.school_results_next_button.collidepoint(mx, my):
-                        if self.school_result and self.school_result.get("passed"):
-                            next_level_index = self.school_result.get("next_level_index")
-                            if next_level_index is not None:
-                                self.school = DrivingSchool(self, level_index=next_level_index)
-                                self.state = "DRIVING_SCHOOL"
-                            else:
-                                self.school = None
-                                self.state = "DRIVING_SCHOOL_SELECT"
-                        else:
-                            if self.school_result:
-                                self.school = DrivingSchool(self, level_index=self.school_result.get("level_index", 0))
-                                self.state = "DRIVING_SCHOOL"
-                    elif getattr(self, "school_results_back_button", None) and self.school_results_back_button.collidepoint(mx, my):
-                        self.school = None
-                        self.state = "DRIVING_SCHOOL_SELECT"
-
             if event.type == pygame.KEYDOWN:
                 # Music toggle key
                 if event.key == pygame.K_m:
@@ -1080,49 +605,11 @@ class Game:
                     self.state = "PLAY"
                     if self.music_on:
                         self.start_music()
-                elif self.state == "START" and event.key == pygame.K_d:
-                    # Open Driving School level select
-                    self.state = "DRIVING_SCHOOL_SELECT"
-                elif self.state == "DRIVING_SCHOOL_SELECT":
-                    if event.key in (pygame.K_1, pygame.K_KP1, pygame.K_LEFT):
-                        self.school_select_index = 0
-                    elif event.key in (pygame.K_2, pygame.K_KP2):
-                        self.school_select_index = 1
-                    elif event.key in (pygame.K_3, pygame.K_KP3, pygame.K_RIGHT):
-                        self.school_select_index = 2
-                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        self.school = DrivingSchool(self, level_index=self.school_select_index)
-                        self.state = "DRIVING_SCHOOL"
-                        if self.music_on:
-                            self.start_music()
-                    elif event.key == pygame.K_ESCAPE:
-                        self.state = "START"
                 elif self.state == "GAME_OVER" and event.key == pygame.K_r:
                     self.reset_game()
                     self.state = "PLAY"
                     if self.music_on:
                         self.start_music()
-                elif self.state == "DRIVING_SCHOOL" and event.key == pygame.K_ESCAPE:
-                    # exit driving school
-                    self.school = None
-                    self.state = "DRIVING_SCHOOL_SELECT"
-                elif self.state == "DRIVING_SCHOOL_RESULTS":
-                    if event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        if self.school_result and self.school_result.get("passed"):
-                            next_level_index = self.school_result.get("next_level_index")
-                            if next_level_index is not None:
-                                self.school = DrivingSchool(self, level_index=next_level_index)
-                                self.state = "DRIVING_SCHOOL"
-                            else:
-                                self.school = None
-                                self.state = "DRIVING_SCHOOL_SELECT"
-                        else:
-                            if self.school_result:
-                                self.school = DrivingSchool(self, level_index=self.school_result.get("level_index", 0))
-                                self.state = "DRIVING_SCHOOL"
-                    elif event.key == pygame.K_ESCAPE:
-                        self.school = None
-                        self.state = "DRIVING_SCHOOL_SELECT"
                 elif self.state == "PLAY":
                     if event.key == pygame.K_h and self.snd_honk is not None:
                         self.snd_honk.play()
@@ -1764,155 +1251,8 @@ class Game:
             self.screen.blit(r, (px + 20, ly))
             ly += 32
 
-        # Driving School prompt (placed above the main prompt to avoid overlap)
-        ds = self.font.render("Press D for Driving School (Level Select)", True, PLAYER_COLOR)
-        self.screen.blit(ds, (WIDTH//2 - ds.get_width()//2, py + panel_h - 74))
-
         prompt = self.font.render("Press ENTER to Start", True, PLAYER_COLOR)
         self.screen.blit(prompt, (WIDTH//2 - prompt.get_width()//2, py + panel_h - 40))
-
-    def draw_driving_school_select(self):
-        # dark background with subtle gradient
-        for y in range(HEIGHT):
-            shade = 12 + int(18 * (y / HEIGHT))
-            self.screen.fill((shade, shade + 2, shade + 4), rect=pygame.Rect(0, y, WIDTH, 1))
-
-        title = self.big_font.render("Driving School", True, TEXT)
-        subtitle = self.font.render("Choose a practice level before you start", True, ACCENT)
-        self.screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 24))
-        self.screen.blit(subtitle, (WIDTH // 2 - subtitle.get_width() // 2, 72))
-
-        card_hint_font = pygame.font.SysFont("Arial", 18, bold=True)
-
-        cards = []
-        card_w = 360
-        card_h = 132
-        gap = 18
-        start_y = 120
-        levels = self.school.levels if self.school else DrivingSchool.LEVELS
-        # draw a centered translucent panel behind the cards to keep UI readable
-        total_h = len(levels) * card_h + (len(levels) - 1) * gap + 36
-        panel_w = card_w + 80
-        panel_h = total_h + 48
-        panel_x = WIDTH // 2 - panel_w // 2
-        panel_y = start_y - 18
-        panel_surf = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        panel_surf.fill((18, 18, 20, 232))
-        pygame.draw.rect(panel_surf, (80, 80, 90), (0, 0, panel_w, panel_h), 2, border_radius=16)
-        self.screen.blit(panel_surf, (panel_x, panel_y))
-        for i, level in enumerate(levels):
-            x = WIDTH // 2 - card_w // 2
-            y = start_y + i * (card_h + gap)
-            rect = pygame.Rect(x, y, card_w, card_h)
-            cards.append(rect)
-            selected = i == self.school_select_index
-            fill = (30, 32, 38) if not selected else (46, 50, 60)
-            pygame.draw.rect(self.screen, fill, rect, border_radius=14)
-            pygame.draw.rect(self.screen, ACCENT if selected else (78, 78, 86), rect, 2, border_radius=14)
-            name = self.font.render(level["name"], True, TEXT)
-            self.screen.blit(name, (rect.x + 14, rect.y + 10))
-            hint = card_hint_font.render(f"Press {i + 1} or click", True, PLAYER_COLOR)
-            self.screen.blit(hint, (rect.x + 14, rect.y + 38))
-            thumb = pygame.Rect(rect.x + 14, rect.y + 42, 96, 64)
-            self.draw_level_thumbnail(self.screen, thumb, level.get("thumbnail", "parking"), selected)
-            ry = rect.y + 50
-            for rule in level["rules"][:2]:
-                r = self.font.render(f"- {rule}", True, TEXT)
-                self.screen.blit(r, (rect.x + 122, ry))
-                ry += 24
-
-        self.school_select_cards = cards
-
-        # action buttons
-        start_rect = pygame.Rect(WIDTH // 2 - 150, panel_y + panel_h + 12, 140, 40)
-        back_rect = pygame.Rect(WIDTH // 2 + 10, panel_y + panel_h + 12, 140, 40)
-        self.school_select_start_button = start_rect
-        self.school_select_back_button = back_rect
-        for rect, label, selected in [
-            (start_rect, "Start", True),
-            (back_rect, "Back", False),
-        ]:
-            fill = (58, 64, 78) if selected else (36, 40, 48)
-            pygame.draw.rect(self.screen, fill, rect, border_radius=8)
-            pygame.draw.rect(self.screen, ACCENT if selected else (70, 70, 80), rect, 2, border_radius=8)
-            label_surf = self.font.render(label, True, TEXT)
-            self.screen.blit(label_surf, (rect.centerx - label_surf.get_width() // 2, rect.centery - label_surf.get_height() // 2))
-
-        bottom = self.font.render("Enter/Space to start selected level   Esc to go back", True, TEXT)
-        self.screen.blit(bottom, (WIDTH // 2 - bottom.get_width() // 2, panel_y + panel_h + 64))
-
-    def draw_level_thumbnail(self, surf, rect, thumbnail_kind, selected=False):
-        bg = (32, 34, 40) if not selected else (46, 50, 60)
-        pygame.draw.rect(surf, bg, rect, border_radius=10)
-        pygame.draw.rect(surf, ACCENT if selected else (78, 78, 86), rect, 2, border_radius=10)
-        if thumbnail_kind == "parking":
-            bay = rect.inflate(-18, -18)
-            pygame.draw.rect(surf, (84, 84, 84), bay, 2)
-            pygame.draw.line(surf, (220, 220, 220), (bay.left + 10, bay.bottom - 8), (bay.right - 10, bay.bottom - 8), 3)
-            pygame.draw.rect(surf, (234, 187, 64), (rect.centerx - 9, rect.centery - 11, 18, 26), border_radius=4)
-        elif thumbnail_kind == "turn":
-            pygame.draw.rect(surf, (60, 60, 70), (rect.x + 10, rect.centery - 7, rect.w - 20, 14), border_radius=6)
-            pygame.draw.line(surf, (234, 187, 64), (rect.x + 16, rect.centery + 18), (rect.right - 16, rect.centery - 18), 4)
-            pygame.draw.polygon(surf, (234, 187, 64), [(rect.right - 18, rect.centery - 18), (rect.right - 22, rect.centery - 8), (rect.right - 10, rect.centery - 12)])
-        else:
-            for x in range(rect.x + 12, rect.right - 12, 18):
-                pygame.draw.line(surf, (220, 220, 220), (x, rect.y + 10), (x, rect.bottom - 10), 2)
-            pygame.draw.rect(surf, (234, 187, 64), (rect.x + 18, rect.centery - 8, rect.w - 36, 16), border_radius=5)
-
-    def draw_star_row(self, surf, x, y, stars, max_stars=3):
-        for i in range(max_stars):
-            cx = x + i * 34
-            color = (255, 208, 80) if i < stars else (80, 80, 90)
-            points = []
-            outer = 12
-            inner = 5
-            for p in range(10):
-                ang = -math.pi / 2 + p * math.pi / 5
-                r = outer if p % 2 == 0 else inner
-                points.append((cx + math.cos(ang) * r, y + math.sin(ang) * r))
-            pygame.draw.polygon(surf, color, points)
-
-    def draw_driving_school_results(self):
-        result = self.school_result or {}
-        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 155))
-        self.screen.blit(overlay, (0, 0))
-
-        box = pygame.Rect(WIDTH // 2 - 260, HEIGHT // 2 - 180, 520, 360)
-        pygame.draw.rect(self.screen, (18, 20, 26), box, border_radius=14)
-        pygame.draw.rect(self.screen, (76, 76, 88), box, 2, border_radius=14)
-
-        title_text = "PASS" if result.get("passed") else "FAIL"
-        title_color = SAFE if result.get("passed") else DANGER
-        title = self.big_font.render(title_text, True, title_color)
-        self.screen.blit(title, (box.centerx - title.get_width() // 2, box.y + 18))
-
-        level_name = self.font.render(result.get("level_name", "Driving School"), True, TEXT)
-        self.screen.blit(level_name, (box.centerx - level_name.get_width() // 2, box.y + 78))
-
-        grade = int(result.get("grade", 0))
-        grade_text = self.font.render(f"Grade: {grade}/100", True, ACCENT)
-        self.screen.blit(grade_text, (box.centerx - grade_text.get_width() // 2, box.y + 116))
-        self.draw_star_row(self.screen, box.centerx - 34, box.y + 158, int(result.get("stars", 0)))
-
-        notes = self.font.render(result.get("notes", ""), True, TEXT)
-        self.screen.blit(notes, (box.centerx - notes.get_width() // 2, box.y + 196))
-
-        next_label = "Next Level" if result.get("passed") and result.get("next_level_index") is not None else ("Finish" if result.get("passed") else "Retry")
-        self.school_results_next_button = pygame.Rect(box.centerx - 140, box.bottom - 78, 130, 42)
-        self.school_results_back_button = pygame.Rect(box.centerx + 10, box.bottom - 78, 130, 42)
-
-        for rect, label, active in [
-            (self.school_results_next_button, next_label, True),
-            (self.school_results_back_button, "Select", False),
-        ]:
-            pygame.draw.rect(self.screen, (56, 60, 70) if active else (38, 42, 50), rect, border_radius=8)
-            pygame.draw.rect(self.screen, ACCENT if active else (76, 76, 88), rect, 2, border_radius=8)
-            label_surf = self.font.render(label, True, TEXT)
-            self.screen.blit(label_surf, (rect.centerx - label_surf.get_width() // 2, rect.centery - label_surf.get_height() // 2))
-
-        hint = self.font.render("Enter/Space to continue   Esc to select a level", True, TEXT)
-        self.screen.blit(hint, (box.centerx - hint.get_width() // 2, box.bottom - 24))
 
     def draw_game_over(self):
         # Semi-transparent overlay
